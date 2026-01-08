@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,8 @@ import Icon from '@/components/ui/icon';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/use-toast';
 
 interface Account {
   id: string;
@@ -25,6 +27,12 @@ interface Transaction {
   type: 'income' | 'expense';
   category: string;
   date: string;
+  icon: string;
+}
+
+interface CategoryLimit {
+  category: string;
+  limit: number;
   icon: string;
 }
 
@@ -109,6 +117,13 @@ const Index = () => {
 
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [selectedAccount, setSelectedAccount] = useState<string>('1');
+  const [categoryLimits, setCategoryLimits] = useState<CategoryLimit[]>([
+    { category: 'Продукты', limit: 15000, icon: 'ShoppingCart' },
+    { category: 'Переводы', limit: 10000, icon: 'Send' },
+    { category: 'Услуги', limit: 5000, icon: 'Wifi' },
+  ]);
+  const [editingLimit, setEditingLimit] = useState<CategoryLimit | null>(null);
+  const [newLimitValue, setNewLimitValue] = useState<string>('');
 
   const totalBalance = accounts.reduce((sum, acc) => sum + acc.balance, 0);
 
@@ -137,9 +152,58 @@ const Index = () => {
       totalExpenses,
       totalIncome,
       balance: totalIncome - totalExpenses,
-      categoryData
+      categoryData,
+      categoryTotals
     };
   }, [transactions]);
+
+  const limitsWithProgress = useMemo(() => {
+    return categoryLimits.map(limit => {
+      const spent = analytics.categoryTotals[limit.category] || 0;
+      const percentage = (spent / limit.limit) * 100;
+      const isExceeded = percentage > 100;
+      const isWarning = percentage > 80 && percentage <= 100;
+      
+      return {
+        ...limit,
+        spent,
+        percentage: Math.min(percentage, 100),
+        isExceeded,
+        isWarning,
+        remaining: limit.limit - spent
+      };
+    });
+  }, [categoryLimits, analytics.categoryTotals]);
+
+  useEffect(() => {
+    limitsWithProgress.forEach(limit => {
+      if (limit.isExceeded) {
+        toast({
+          title: '⚠️ Превышен лимит!',
+          description: `Категория "${limit.category}": потрачено ${limit.spent.toLocaleString('ru-RU')} ₽ из ${limit.limit.toLocaleString('ru-RU')} ₽`,
+          variant: 'destructive',
+        });
+      }
+    });
+  }, [limitsWithProgress]);
+
+  const handleUpdateLimit = () => {
+    if (editingLimit && newLimitValue) {
+      setCategoryLimits(prev =>
+        prev.map(l =>
+          l.category === editingLimit.category
+            ? { ...l, limit: Number(newLimitValue) }
+            : l
+        )
+      );
+      setEditingLimit(null);
+      setNewLimitValue('');
+      toast({
+        title: '✓ Лимит обновлён',
+        description: `Установлен новый лимит для категории "${editingLimit.category}"`,
+      });
+    }
+  };
 
   const handleWithdraw = () => {
     if (withdrawAmount && Number(withdrawAmount) > 0) {
@@ -342,6 +406,121 @@ const Index = () => {
                       value={category.percentage} 
                       className="h-2"
                     />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="glass-card border-primary/20">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Icon name="Target" size={24} className="text-primary" />
+                    Лимиты расходов
+                  </span>
+                  <Badge variant="secondary" className="text-xs">
+                    {limitsWithProgress.filter(l => l.isExceeded).length} превышено
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {limitsWithProgress.map((limit, index) => (
+                  <div key={limit.category} className="space-y-2" style={{ animationDelay: `${index * 0.1}s` }}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${
+                          limit.isExceeded ? 'bg-destructive/20' : limit.isWarning ? 'bg-yellow-500/20' : 'glass-card'
+                        }`}>
+                          <Icon 
+                            name={limit.icon} 
+                            size={18} 
+                            className={
+                              limit.isExceeded ? 'text-destructive' : 
+                              limit.isWarning ? 'text-yellow-500' : 
+                              'text-muted-foreground'
+                            } 
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold">{limit.category}</p>
+                            {limit.isExceeded && (
+                              <Badge variant="destructive" className="text-xs">Превышен</Badge>
+                            )}
+                            {limit.isWarning && !limit.isExceeded && (
+                              <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-500">80%+</Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            Потрачено {limit.spent.toLocaleString('ru-RU')} ₽ из {limit.limit.toLocaleString('ru-RU')} ₽
+                          </p>
+                        </div>
+                      </div>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => {
+                              setEditingLimit(limit);
+                              setNewLimitValue(limit.limit.toString());
+                            }}
+                          >
+                            <Icon name="Settings" size={16} />
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="glass-card border-primary/20">
+                          <DialogHeader>
+                            <DialogTitle>Изменить лимит</DialogTitle>
+                            <DialogDescription>
+                              Установите новый лимит для категории "{limit.category}"
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-4 py-4">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Новый лимит (₽)</label>
+                              <Input
+                                type="number"
+                                value={newLimitValue}
+                                onChange={(e) => setNewLimitValue(e.target.value)}
+                                placeholder="Введите сумму"
+                                className="h-12 text-lg"
+                              />
+                            </div>
+                            <Button 
+                              className="w-full gradient-purple-pink text-white"
+                              onClick={handleUpdateLimit}
+                            >
+                              Сохранить
+                            </Button>
+                          </div>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                    <div className="relative">
+                      <Progress 
+                        value={limit.percentage} 
+                        className={`h-3 ${
+                          limit.isExceeded ? '[&>div]:bg-destructive' : 
+                          limit.isWarning ? '[&>div]:bg-yellow-500' : 
+                          ''
+                        }`}
+                      />
+                      {limit.isExceeded && (
+                        <div 
+                          className="absolute top-0 left-0 h-full bg-destructive/30 rounded-full"
+                          style={{ width: '100%' }}
+                        />
+                      )}
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">
+                        {limit.percentage.toFixed(0)}% использовано
+                      </span>
+                      <span className={limit.remaining >= 0 ? 'text-accent' : 'text-destructive'}>
+                        {limit.remaining >= 0 ? 'Осталось' : 'Превышено на'} {Math.abs(limit.remaining).toLocaleString('ru-RU')} ₽
+                      </span>
+                    </div>
                   </div>
                 ))}
               </CardContent>
